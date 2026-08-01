@@ -105,3 +105,35 @@ async def test_drevo_node_fulltext_int():
     finally:
         await driver.execute_query(f'MATCH (n:Entity {{group_id: "{GROUP}"}}) DETACH DELETE n')
         await driver.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.skipif(not HAS_NEO4J, reason='neo4j driver package is not installed')
+async def test_drevo_edge_fulltext_int():
+    """Edge full-text against a live drevo via native fts.searchRelationships."""
+    driver = await _connect_or_skip()
+    try:
+        await driver.execute_query(f'MATCH (n:Entity {{group_id: "{GROUP}"}}) DETACH DELETE n')
+        await driver.execute_query(
+            f'CREATE (a:Entity {{uuid: "src", name: "Alice", group_id: "{GROUP}", '
+            'created_at: "2026-01-01T00:00:00Z"})'
+            '-[:RELATES_TO {uuid: "rel-1", name: "founded", '
+            f'fact: "Alice founded Zebra Corporation", group_id: "{GROUP}", '
+            'created_at: "2026-01-01T00:00:00Z", episodes: []}]->'
+            f'(b:Entity {{uuid: "tgt", name: "Zebra Corp", group_id: "{GROUP}", '
+            'created_at: "2026-01-01T00:00:00Z"})'
+        )
+        interface = driver.search_interface
+        results = await interface.edge_fulltext_search(
+            driver,
+            query='zebra corporation',
+            search_filter=SearchFilters(),
+            group_ids=[GROUP],
+            limit=10,
+        )
+        assert [e.uuid for e in results] == ['rel-1'], results
+        assert interface._native_fts is True, 'expected native fts.searchRelationships'
+    finally:
+        await driver.execute_query(f'MATCH (n:Entity {{group_id: "{GROUP}"}}) DETACH DELETE n')
+        await driver.close()
