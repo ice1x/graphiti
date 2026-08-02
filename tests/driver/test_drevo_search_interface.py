@@ -32,6 +32,7 @@ def _drevo_driver_stub(execute_query: AsyncMock):
 
 _UNSUPPORTED_COSINE = Exception('unsupported Cypher feature `function call `cosine_similarity``')
 _UNSUPPORTED_FTS = Exception('unsupported procedure `fts.search`')
+_UNSUPPORTED_STARTNODE = Exception('unsupported Cypher feature `function call `startNode``')
 
 
 @pytest.mark.asyncio
@@ -294,16 +295,19 @@ class TestNodeFulltextSearch:
 
 @pytest.mark.asyncio
 class TestEdgeFulltextSearch:
-    async def test_uses_native_search_relationships(self):
+    async def test_uses_native_search_relationships_with_direct_endpoints(self):
+        # Modern drevo: fts.searchRelationships + startNode/endNode both supported, so
+        # the direct projection is used with no endpoint re-match.
         records = [{'uuid': 'e1'}]
         execute_query = AsyncMock(return_value=(records, None, None))
         driver = _drevo_driver_stub(execute_query)
+        interface = DrevoSearchInterface()
 
         with patch(
             'graphiti_core.driver.drevo_search_interface.get_entity_edge_from_record',
             side_effect=lambda record, provider: SimpleNamespace(uuid=record['uuid']),
         ):
-            result = await DrevoSearchInterface().edge_fulltext_search(
+            result = await interface.edge_fulltext_search(
                 driver,
                 query='alpha beta',
                 search_filter=SearchFilters(),
@@ -312,28 +316,96 @@ class TestEdgeFulltextSearch:
             )
 
         assert [e.uuid for e in result] == ['e1']
+        assert execute_query.await_count == 1
         cypher = execute_query.await_args.args[0]
         assert 'CALL fts.searchRelationships($fts_query, $fts_k)' in cypher
-        assert 'MATCH (n:Entity)-[e]->(m:Entity)' in cypher
+        assert 'startNode(e).uuid AS source_node_uuid' in cypher
+        assert 'endNode(e).uuid AS target_node_uuid' in cypher
+        assert 'MATCH (n:Entity)-[e]->(m:Entity)' not in cypher
         assert 'e.group_id IN $group_ids' in cypher
         assert 'CONTAINS' not in cypher
+        assert interface._native_fts is True
+        assert interface._native_endpoints is True
+
+    async def test_falls_back_to_endpoint_rematch_when_startnode_unsupported(self, caplog):
+        # Old drevo has fts.searchRelationships but not startNode/endNode: warn once,
+        # then re-match the endpoints and project n.uuid/m.uuid.
+        records = [{'uuid': 'e1'}]
+        execute_query = AsyncMock(side_effect=[_UNSUPPORTED_STARTNODE, (records, None, None)])
+        driver = _drevo_driver_stub(execute_query)
+        interface = DrevoSearchInterface()
+
+        with (
+            patch(
+                'graphiti_core.driver.drevo_search_interface.get_entity_edge_from_record',
+                side_effect=lambda record, provider: SimpleNamespace(uuid=record['uuid']),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = await interface.edge_fulltext_search(
+                driver, query='alpha beta', search_filter=SearchFilters(), limit=10
+            )
+
+        assert [e.uuid for e in result] == ['e1']
+        assert execute_query.await_count == 2
+        rematch_cypher = execute_query.await_args_list[1].args[0]
+        assert 'CALL fts.searchRelationships($fts_query, $fts_k)' in rematch_cypher
+        assert 'MATCH (n:Entity)-[e]->(m:Entity)' in rematch_cypher
+        assert 'n.uuid AS source_node_uuid' in rematch_cypher
+        assert 'startNode(e)' not in rematch_cypher
+        assert interface._native_fts is True
+        assert interface._native_endpoints is False
+        assert 'startNode' in caplog.text and 'drevo#232' in caplog.text
+
+    async def test_startnode_fallback_warns_only_once(self, caplog):
+        records = [{'uuid': 'e1'}]
+        # 1st call: direct fails then re-match; 2nd call: re-match only (direct skipped).
+        execute_query = AsyncMock(
+            side_effect=[
+                _UNSUPPORTED_STARTNODE,
+                (records, None, None),
+                (records, None, None),
+            ]
+        )
+        driver = _drevo_driver_stub(execute_query)
+        interface = DrevoSearchInterface()
+
+        with (
+            patch(
+                'graphiti_core.driver.drevo_search_interface.get_entity_edge_from_record',
+                side_effect=lambda record, provider: SimpleNamespace(uuid=record['uuid']),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            await interface.edge_fulltext_search(
+                driver, query='alpha beta', search_filter=SearchFilters(), limit=10
+            )
+            await interface.edge_fulltext_search(
+                driver, query='alpha beta', search_filter=SearchFilters(), limit=10
+            )
+
+        # 2 (fail+rematch) + 1 (rematch only, direct skipped) = 3 calls; 1 warning.
+        assert execute_query.await_count == 3
+        assert caplog.text.count('startNode()/endNode() functions') == 1
 
     async def test_falls_back_to_lexical(self):
         lexical_records = [{'uuid': 'e1', 'fulltext_name': 'rel', 'fulltext_fact': 'alpha beta'}]
         execute_query = AsyncMock(side_effect=[_UNSUPPORTED_FTS, (lexical_records, None, None)])
         driver = _drevo_driver_stub(execute_query)
+        interface = DrevoSearchInterface()
 
         with patch(
             'graphiti_core.driver.drevo_search_interface.get_entity_edge_from_record',
             side_effect=lambda record, provider: SimpleNamespace(uuid=record['uuid']),
         ):
-            result = await DrevoSearchInterface().edge_fulltext_search(
+            result = await interface.edge_fulltext_search(
                 driver, query='alpha beta', search_filter=SearchFilters(), limit=10
             )
 
         assert [e.uuid for e in result] == ['e1']
         fallback_cypher = execute_query.await_args_list[1].args[0]
         assert 'toLower(e.fact) CONTAINS $term_0' in fallback_cypher
+        assert interface._native_fts is False
 
 
 @pytest.mark.asyncio

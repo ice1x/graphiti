@@ -134,6 +134,9 @@ async def test_drevo_edge_fulltext_int():
         )
         assert [e.uuid for e in results] == ['rel-1'], results
         assert interface._native_fts is True, 'expected native fts.searchRelationships'
+        # A drevo build with startNode/endNode (drevo#232) takes the direct projection,
+        # not the endpoint re-match fallback.
+        assert interface._native_endpoints is True, 'expected direct startNode/endNode'
     finally:
         await driver.execute_query(f'MATCH (n:Entity {{group_id: "{GROUP}"}}) DETACH DELETE n')
         await driver.close()
