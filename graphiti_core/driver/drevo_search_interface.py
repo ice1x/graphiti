@@ -61,13 +61,25 @@ def _is_fts_unsupported_error(exc: Exception) -> bool:
 
     Older drevo builds (before the FTS-over-Cypher work, drevo#208/#227) answer a
     ``CALL fts.search(...)`` with an "unsupported"/"unknown procedure" database
-    error. Matched on the message to stay decoupled from the neo4j driver; any
-    other error propagates.
+    error. ``fts.searchRelationships`` (drevo#229) shares the ``fts.search`` prefix,
+    so this same predicate covers the edge procedure too. Matched on the message to
+    stay decoupled from the neo4j driver; any other error propagates.
     """
     message = str(exc).lower()
     return 'fts.search' in message and (
         'unsupported' in message or 'unknown' in message or 'no such procedure' in message
     )
+
+
+def _is_startnode_unsupported_error(exc: Exception) -> bool:
+    """True if ``exc`` is drevo rejecting the ``startNode``/``endNode`` functions.
+
+    Older drevo builds (before drevo#232) answer a ``startNode(rel)``/``endNode(rel)``
+    call with an "unsupported Cypher feature" database error. Matched on the message
+    to stay decoupled from the neo4j driver; any other error propagates.
+    """
+    message = str(exc).lower()
+    return 'unsupported' in message and ('startnode' in message or 'endnode' in message)
 
 
 # fts.search returns the global BM25 top-k, which we then post-filter by label and
@@ -79,10 +91,12 @@ def _fts_k(limit: int) -> int:
 def _drevo_edge_return_query(provider: Any) -> str:
     """Edge RETURN using the bound endpoints ``n``/``m`` instead of startNode/endNode.
 
-    graphiti's shared edge return projects ``startNode(e).uuid`` / ``endNode(e).uuid``,
-    but drevo has no ``startNode``/``endNode`` yet ("future Phase 10"). Every drevo edge
-    query already binds the endpoints as ``(n)-[e]->(m)``, so swap those calls for
-    ``n.uuid`` / ``m.uuid``.
+    graphiti's shared edge return projects ``startNode(e).uuid`` / ``endNode(e).uuid``.
+    ``edge_similarity_search`` and the lexical edge fallback bind the endpoints as
+    ``(n)-[e]->(m)`` intrinsically (they filter/traverse on them), so this projects
+    ``n.uuid`` / ``m.uuid`` directly. It is also the endpoint re-match fallback for
+    native edge full-text on a drevo build that predates ``startNode``/``endNode``
+    (drevo#232); newer builds use the direct projection with no extra match.
     """
     return (
         get_entity_edge_return_query(provider)
@@ -171,15 +185,20 @@ class DrevoSearchInterface(SearchInterface):
     by label and group. Both fall back — to library-side cosine and lexical
     ``CONTAINS`` respectively — with one warning if the connected drevo is an older
     build that rejects the native feature. Edge full-text uses the native
-    ``CALL fts.searchRelationships`` procedure (drevo#229), re-matching endpoints for
-    the return. BFS, rerankers and community embeddings are not overridden — they use
-    the inline Neo4j-compatible Cypher drevo supports.
+    ``CALL fts.searchRelationships`` procedure (drevo#229) with a direct
+    ``startNode(e)``/``endNode(e)`` projection (drevo#232), falling back to an endpoint
+    re-match on builds that lack those functions. BFS, rerankers and community
+    embeddings are not overridden — they use the inline Neo4j-compatible Cypher drevo
+    supports.
     """
 
     # None = not yet probed, True = native cosine_similarity works, False = fall back.
     _native_cosine: bool | None = PrivateAttr(default=None)
     # Same probe-once state for the native fts.search full-text procedure.
     _native_fts: bool | None = PrivateAttr(default=None)
+    # Same probe-once state for the native startNode()/endNode() functions (drevo#232),
+    # used only by edge full-text; None = unprobed, True = direct projection, False = re-match.
+    _native_endpoints: bool | None = PrivateAttr(default=None)
 
     async def _ranked_similarity(
         self,
@@ -458,33 +477,86 @@ class DrevoSearchInterface(SearchInterface):
         if group_ids is not None:
             filter_queries.append('e.group_id IN $group_ids')
             filter_params['group_ids'] = group_ids
-        # Only `e` is bound before the endpoint re-match, so filters must be on `e`.
+        # Only `e` is bound after the YIELD, so filters must be on `e`.
         where = (' WHERE ' + ' AND '.join(filter_queries)) if filter_queries else ''
-
-        # fts.searchRelationships yields only the relationship; re-match its endpoints
-        # (drevo has no startNode/endNode yet) so the edge return query resolves n/m.
-        native_cypher = (
-            'CALL fts.searchRelationships($fts_query, $fts_k) YIELD rel, score '
-            'WITH rel AS e, score' + where + ' '
-            'MATCH (n:Entity)-[e]->(m:Entity) '
-            'RETURN ' + _drevo_edge_return_query(driver.provider) + ' '
-            'ORDER BY score DESC LIMIT $limit'
-        )
         native_params = {
             'fts_query': query,
             'fts_k': _fts_k(limit),
             'limit': limit,
             **filter_params,
         }
-        return await self._fulltext(
-            driver,
-            native_cypher=native_cypher,
-            native_params=native_params,
-            parse=lambda record: get_entity_edge_from_record(record, driver.provider),
-            fallback=lambda: self._lexical_edge_fulltext(
-                driver, query, search_filter, group_ids, limit
-            ),
+
+        # Native edge full-text has two independent probes: the fts.searchRelationships
+        # procedure (drevo#229) and the startNode/endNode functions (drevo#232). The
+        # inner helper handles the startNode/endNode fallback; an unsupported-fts error
+        # propagates here and drops the whole path to the lexical fallback.
+        if self._native_fts is not False:
+            try:
+                records = await self._run_native_edge_fulltext(driver, where, native_params)
+            except Exception as e:
+                if not _is_fts_unsupported_error(e):
+                    raise
+                if self._native_fts is None:
+                    logger.warning(
+                        'drevo rejected the native fts.searchRelationships procedure '
+                        '(unsupported); falling back to lexical CONTAINS edge full-text '
+                        'search for this session. Upgrade drevo to a build with edge '
+                        'full-text over Cypher (drevo#229) for BM25 ranking.'
+                    )
+                self._native_fts = False
+            else:
+                self._native_fts = True
+                return [get_entity_edge_from_record(record, driver.provider) for record in records]
+
+        return await self._lexical_edge_fulltext(driver, query, search_filter, group_ids, limit)
+
+    async def _run_native_edge_fulltext(
+        self,
+        driver: Any,
+        where: str,
+        native_params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Run native ``fts.searchRelationships``, returning the raw records.
+
+        Prefers the direct ``startNode(e)``/``endNode(e)`` projection (drevo#232). On
+        the specific "unsupported startNode/endNode" error it logs a single warning and
+        switches to an endpoint re-match (``MATCH (n:Entity)-[e]->(m:Entity)``) for this
+        and all subsequent calls. An unsupported-``fts`` error is *not* handled here —
+        it propagates so the caller can drop to the lexical fallback.
+        """
+        if self._native_endpoints is not False:
+            direct_cypher = (
+                'CALL fts.searchRelationships($fts_query, $fts_k) YIELD rel, score '
+                'WITH rel AS e, score' + where + ' '
+                'RETURN ' + get_entity_edge_return_query(driver.provider) + ' '
+                'ORDER BY score DESC LIMIT $limit'
+            )
+            try:
+                records, _, _ = await driver.execute_query(direct_cypher, **native_params)
+            except Exception as e:
+                if not _is_startnode_unsupported_error(e):
+                    raise
+                if self._native_endpoints is None:
+                    logger.warning(
+                        'drevo rejected the native startNode()/endNode() functions '
+                        '(unsupported); falling back to an endpoint re-match for edge '
+                        'full-text this session. Upgrade drevo to a build with '
+                        'startNode/endNode (drevo#232) to drop the extra pattern match.'
+                    )
+                self._native_endpoints = False
+            else:
+                self._native_endpoints = True
+                return records
+
+        rematch_cypher = (
+            'CALL fts.searchRelationships($fts_query, $fts_k) YIELD rel, score '
+            'WITH rel AS e, score' + where + ' '
+            'MATCH (n:Entity)-[e]->(m:Entity) '
+            'RETURN ' + _drevo_edge_return_query(driver.provider) + ' '
+            'ORDER BY score DESC LIMIT $limit'
         )
+        records, _, _ = await driver.execute_query(rematch_cypher, **native_params)
+        return records
 
     async def _lexical_edge_fulltext(
         self,
