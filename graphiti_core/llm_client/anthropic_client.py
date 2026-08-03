@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -33,15 +35,21 @@ if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
     from anthropic.types import MessageParam, ToolChoiceParam, ToolUnionParam
 else:
+    # Defer the optional-SDK requirement to construction time: importing this module
+    # must never fail just because the `anthropic` extra is not installed (issue #18).
     try:
         import anthropic
         from anthropic import AsyncAnthropic
         from anthropic.types import MessageParam, ToolChoiceParam, ToolUnionParam
     except ImportError:
-        raise ImportError(
-            'anthropic is required for AnthropicClient. '
-            'Install it with: pip install graphiti-core[anthropic]'
-        ) from None
+        anthropic = None
+        AsyncAnthropic = None
+        MessageParam = ToolChoiceParam = ToolUnionParam = None
+
+_ANTHROPIC_IMPORT_ERROR = ImportError(
+    'anthropic is required for AnthropicClient. '
+    'Install it with: pip install graphiti-core[anthropic]'
+)
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +136,9 @@ class AnthropicClient(LLMClient):
         client: AsyncAnthropic | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
+        if anthropic is None:
+            raise _ANTHROPIC_IMPORT_ERROR
+
         if config is None:
             config = LLMConfig()
             config.api_key = os.getenv('ANTHROPIC_API_KEY')

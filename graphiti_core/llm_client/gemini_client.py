@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -31,15 +33,19 @@ if TYPE_CHECKING:
     from google import genai
     from google.genai import types
 else:
+    # Defer the optional-SDK requirement to construction time: importing this module
+    # must never fail just because the `google-genai` extra is not installed (issue #18).
     try:
         from google import genai
         from google.genai import types
     except ImportError:
-        # If gemini client is not installed, raise an ImportError
-        raise ImportError(
-            'google-genai is required for GeminiClient. '
-            'Install it with: pip install graphiti-core[google-genai]'
-        ) from None
+        genai = None
+        types = None
+
+_GEMINI_IMPORT_ERROR = ImportError(
+    'google-genai is required for GeminiClient. '
+    'Install it with: pip install graphiti-core[google-genai]'
+)
 
 
 logger = logging.getLogger(__name__)
@@ -98,7 +104,7 @@ class GeminiClient(LLMClient):
         cache: bool = False,
         max_tokens: int | None = None,
         thinking_config: types.ThinkingConfig | None = None,
-        client: 'genai.Client | None' = None,
+        client: genai.Client | None = None,
     ):
         """
         Initialize the GeminiClient with the provided configuration, cache setting, and optional thinking config.
@@ -110,6 +116,9 @@ class GeminiClient(LLMClient):
                 Only use with models that support thinking (gemini-2.5+). Defaults to None.
             client (genai.Client | None): An optional async client instance to use. If not provided, a new genai.Client is created.
         """
+        if genai is None:
+            raise _GEMINI_IMPORT_ERROR
+
         if config is None:
             config = LLMConfig()
 
