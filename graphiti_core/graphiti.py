@@ -26,6 +26,7 @@ from typing_extensions import LiteralString
 from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.decorators import handle_multiple_group_ids
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.driver.driver import GraphDriver
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.edges import (
@@ -1756,8 +1757,9 @@ class Graphiti:
 
         edges: list[EntityEdge] = [resolved_edge] + invalidated_edges
 
-        await create_entity_edge_embeddings(self.embedder, edges)
-        await create_entity_node_embeddings(self.embedder, nodes)
+        if not uses_native_auto_embedding(self.driver):
+            await create_entity_edge_embeddings(self.embedder, edges)
+            await create_entity_node_embeddings(self.embedder, nodes)
 
         await add_nodes_and_edges_bulk(self.driver, [], [], nodes, edges, self.embedder)
         return AddTripletResults(edges=edges, nodes=nodes)

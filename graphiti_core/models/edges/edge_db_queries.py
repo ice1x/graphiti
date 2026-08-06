@@ -100,6 +100,18 @@ def get_entity_edge_save_query(provider: GraphProvider, has_aoss: bool = False) 
                     e.attributes = $attributes
                 RETURN e.uuid AS uuid
             """
+        case GraphProvider.DREVO:
+            # drevo has no db.create.setRelationshipVectorProperty; fact_embedding
+            # is stored as a plain array. In native auto-embedding mode the caller
+            # omits fact_embedding from $edge_data so drevo's server-maintained
+            # vector is never overwritten with null on an unchanged-text update.
+            return """
+                MATCH (source:Entity {uuid: $edge_data.source_uuid})
+                MATCH (target:Entity {uuid: $edge_data.target_uuid})
+                MERGE (source)-[e:RELATES_TO {uuid: $edge_data.uuid}]->(target)
+                SET e = $edge_data
+                RETURN e.uuid AS uuid
+            """
         case _:  # Neo4j
             save_embedding_query = (
                 """WITH e CALL db.create.setRelationshipVectorProperty(e, "fact_embedding", $edge_data.fact_embedding)"""

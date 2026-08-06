@@ -23,6 +23,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 from typing_extensions import Any
 
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.driver.driver import (
     GraphDriver,
     GraphDriverSession,
@@ -157,6 +158,11 @@ async def add_nodes_and_edges_bulk_tx(
     embedder: EmbedderClient,
     driver: GraphDriver,
 ):
+    # When the backend embeds server-side (drevo native auto-embedding), skip the
+    # client-side embedding round-trip and omit the embedding property entirely so
+    # the write never overwrites drevo's server-maintained vector.
+    native_embedding = uses_native_auto_embedding(driver)
+
     episodes = [dict(episode) for episode in episodic_nodes]
     for episode in episodes:
         episode['source'] = str(episode['source'].value)
@@ -165,7 +171,7 @@ async def add_nodes_and_edges_bulk_tx(
     nodes = []
 
     for node in entity_nodes:
-        if node.name_embedding is None:
+        if node.name_embedding is None and not native_embedding:
             await node.generate_name_embedding(embedder)
 
         entity_data: dict[str, Any] = {
@@ -174,9 +180,10 @@ async def add_nodes_and_edges_bulk_tx(
             'group_id': node.group_id,
             'summary': node.summary,
             'created_at': node.created_at,
-            'name_embedding': node.name_embedding,
             'labels': list(set(node.labels + ['Entity'])),
         }
+        if not native_embedding:
+            entity_data['name_embedding'] = node.name_embedding
 
         if driver.provider == GraphProvider.KUZU:
             attributes = convert_datetimes_to_strings(node.attributes) if node.attributes else {}
@@ -190,7 +197,7 @@ async def add_nodes_and_edges_bulk_tx(
 
     edges = []
     for edge in entity_edges:
-        if edge.fact_embedding is None:
+        if edge.fact_embedding is None and not native_embedding:
             await edge.generate_embedding(embedder)
         edge_data: dict[str, Any] = {
             'uuid': edge.uuid,
@@ -205,8 +212,9 @@ async def add_nodes_and_edges_bulk_tx(
             'valid_at': edge.valid_at,
             'invalid_at': edge.invalid_at,
             'reference_time': edge.reference_time,
-            'fact_embedding': edge.fact_embedding,
         }
+        if not native_embedding:
+            edge_data['fact_embedding'] = edge.fact_embedding
 
         if driver.provider == GraphProvider.KUZU:
             attributes = convert_datetimes_to_strings(edge.attributes) if edge.attributes else {}

@@ -21,6 +21,7 @@ from time import time
 from pydantic import BaseModel
 from typing_extensions import LiteralString
 
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.driver.driver import GraphDriver, GraphProvider
 from graphiti_core.edges import (
     CommunityEdge,
@@ -360,7 +361,8 @@ async def resolve_extracted_edges(
     driver = clients.driver
     llm_client = clients.llm_client
     embedder = clients.embedder
-    await create_entity_edge_embeddings(embedder, extracted_edges)
+    if not uses_native_auto_embedding(driver):
+        await create_entity_edge_embeddings(embedder, extracted_edges)
 
     valid_edges_list: list[list[EntityEdge]] = await semaphore_gather(
         *[
@@ -527,10 +529,11 @@ async def resolve_extracted_edges(
     logger.debug(f'Resolved edges: {[e.uuid for e in resolved_edges]}')
     logger.debug(f'New edges (non-duplicates): {[e.uuid for e in new_edges]}')
 
-    await semaphore_gather(
-        create_entity_edge_embeddings(embedder, resolved_edges),
-        create_entity_edge_embeddings(embedder, invalidated_edges),
-    )
+    if not uses_native_auto_embedding(driver):
+        await semaphore_gather(
+            create_entity_edge_embeddings(embedder, resolved_edges),
+            create_entity_edge_embeddings(embedder, invalidated_edges),
+        )
 
     return resolved_edges, invalidated_edges, new_edges
 

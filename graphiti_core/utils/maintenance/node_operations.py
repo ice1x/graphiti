@@ -21,6 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.edges import EntityEdge
 from graphiti_core.graphiti_types import GraphitiClients
 from graphiti_core.helpers import semaphore_gather
@@ -775,7 +776,8 @@ async def extract_attributes_from_nodes(
         entity_types=entity_types if include_type_descriptions else None,
     )
 
-    await create_entity_node_embeddings(embedder, nodes)
+    if not uses_native_auto_embedding(clients.driver):
+        await create_entity_node_embeddings(embedder, nodes)
 
     return nodes
 

@@ -92,13 +92,19 @@ class TestDrevoDriver:
         assert isinstance(driver.search_interface, DrevoSearchInterface)
 
     @pytest.mark.asyncio
-    async def test_build_indices_is_noop(self):
-        """drevo manages indexes out-of-band; the connector must not emit Neo4j
-        index procedures, so build_indices_and_constraints issues no queries."""
+    async def test_build_indices_emits_no_index_ddl(self):
+        """drevo manages indexes out-of-band; build_indices_and_constraints must not
+        emit any Neo4j index procedure. It does probe drevo.semantic.info to
+        negotiate native auto-embedding, but issues no CREATE INDEX/FULLTEXT/VECTOR."""
         driver = self._make_driver()
-        with patch.object(driver, 'execute_query') as mock_exec:
+        # Simulate old drevo (no semantic procedures) so negotiation is a clean no-op.
+        exec_mock = AsyncMock(side_effect=Exception('no such procedure'))
+        with patch.object(driver, 'execute_query', exec_mock):
             await driver.build_indices_and_constraints()
-            mock_exec.assert_not_called()
+
+        emitted = ' '.join(str(call.args[0]) for call in exec_mock.await_args_list)
+        assert 'INDEX' not in emitted.upper()
+        assert driver.capabilities.native_auto_embedding is False
 
     @pytest.mark.asyncio
     async def test_delete_all_indexes_is_noop(self):

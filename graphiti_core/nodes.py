@@ -26,6 +26,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import LiteralString
 
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.driver.driver import (
     GraphDriver,
     GraphProvider,
@@ -558,6 +559,11 @@ class EntityNode(Node):
             'summary': self.summary,
             'created_at': self.created_at,
         }
+        # When the backend embeds server-side, omit name_embedding so a save never
+        # overwrites drevo's server-maintained vector (an unchanged-text update
+        # would otherwise null it).
+        if uses_native_auto_embedding(driver):
+            entity_data.pop('name_embedding', None)
 
         if driver.provider == GraphProvider.KUZU:
             entity_data['attributes'] = json.dumps(self.attributes)

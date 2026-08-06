@@ -25,6 +25,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 from typing_extensions import LiteralString
 
+from graphiti_core.driver.capabilities import uses_native_auto_embedding
 from graphiti_core.driver.driver import GraphDriver, GraphProvider
 from graphiti_core.embedder import EmbedderClient
 from graphiti_core.errors import EdgeNotFoundError, GroupsEdgesNotFoundError
@@ -354,6 +355,10 @@ class EntityEdge(Edge):
             'invalid_at': self.invalid_at,
             'reference_time': self.reference_time,
         }
+        # When the backend embeds server-side, omit fact_embedding so a save never
+        # overwrites drevo's server-maintained vector on an unchanged-text update.
+        if uses_native_auto_embedding(driver):
+            edge_data.pop('fact_embedding', None)
 
         if driver.provider == GraphProvider.KUZU:
             edge_data['attributes'] = json.dumps(self.attributes)
