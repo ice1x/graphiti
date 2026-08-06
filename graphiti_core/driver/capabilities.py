@@ -43,3 +43,23 @@ class GraphCapabilities(BaseModel):
 
     supports_vector_index: bool = False
     """Can create/manage a persistent vector index via the query language."""
+
+    native_auto_embedding: bool = False
+    """Server embeds configured node/edge text properties on write (and keeps the
+    vector index in sync), so the connector can skip generating those embeddings
+    client-side for storage. Negotiated per-connection: a connector flips this on
+    only after confirming the backend has a configured embedder (e.g. drevo's
+    ``drevo.semantic.info`` reporting ``embedder_present``). When off, embeddings
+    are generated client-side as before (the safe fallback)."""
+
+
+def uses_native_auto_embedding(driver: object) -> bool:
+    """Whether ``driver`` embeds stored node/edge properties server-side.
+
+    Duck-typed on ``driver.capabilities`` so it works for any connector (and for
+    lightweight stubs) without importing the driver types. Returns ``False`` when
+    the driver exposes no capabilities, keeping the client-side embedding path as
+    the default.
+    """
+    capabilities = getattr(driver, 'capabilities', None)
+    return bool(capabilities is not None and getattr(capabilities, 'native_auto_embedding', False))

@@ -172,6 +172,18 @@ def get_entity_node_save_query(provider: GraphProvider, labels: str, has_aoss: b
                 SET n.name_embedding = join([x IN coalesce($entity_data.name_embedding, []) | toString(x) ], ",")
                 RETURN n.uuid AS uuid
             """
+        case GraphProvider.DREVO:
+            # drevo's Cypher subset has neither db.create.setNodeVectorProperty nor
+            # dynamic-label syntax; it stores/reads name_embedding as a plain array.
+            # In native auto-embedding mode the caller omits name_embedding from
+            # $entity_data, so this SET never overwrites drevo's server-maintained
+            # vector (an unchanged-text update would otherwise null it).
+            return f"""
+                MERGE (n:Entity {{uuid: $entity_data.uuid}})
+                SET n:{labels}
+                SET n = $entity_data
+                RETURN n.uuid AS uuid
+            """
         case _:
             save_embedding_query = (
                 'WITH n CALL db.create.setNodeVectorProperty(n, "name_embedding", $entity_data.name_embedding)'
