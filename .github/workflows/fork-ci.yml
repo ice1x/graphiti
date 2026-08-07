@@ -57,4 +57,8 @@ jobs:
             --ignore=tests/cross_encoder/test_bge_reranker_client_int.py \
             --ignore=tests/evals/
       - name: Driver unit tests (mocked clients, no database)
-        run: uv run pytest tests/driver/test_drevo_driver.py
+        run: |
+          uv run pytest \
+            tests/driver/test_drevo_driver.py \
+            tests/driver/test_drevo_native_embedding.py \
+            tests/driver/test_drevo_search_interface.py
