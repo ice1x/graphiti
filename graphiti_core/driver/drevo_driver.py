@@ -44,6 +44,10 @@ _SEMANTIC_REGISTER_QUERIES = (
     "CALL drevo.semantic.registerRel('RELATES_TO', 'fact', 'fact_embedding', 'auto') "
     'YIELD label RETURN label',
 )
+# Standalone server-side query embedding (drevo#272). Lets graphiti embed the
+# query text server-side and feed the vector to its existing *filtered* cosine
+# Cypher — no client embedder, no lost filters.
+_SEMANTIC_EMBED_QUERY = 'CALL drevo.semantic.embed($text) YIELD vector RETURN vector'
 
 
 class DrevoDriver(Neo4jDriver):
@@ -133,6 +137,28 @@ class DrevoDriver(Neo4jDriver):
 
         self.capabilities.native_auto_embedding = True
         logger.info('drevo native auto-embedding enabled; skipping client-side write embeddings')
+
+        # Separately probe standalone query embedding (drevo#272). A build can
+        # auto-embed writes without exposing drevo.semantic.embed, so the query
+        # path is negotiated independently and falls back to the client embedder.
+        try:
+            records, _, _ = await self.execute_query(
+                _SEMANTIC_EMBED_QUERY, text='drevo native query embedding probe', routing_='r'
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug('drevo standalone query embedding unavailable (semantic.embed): %s', e)
+            return
+
+        if records and records[0].get('vector'):
+            self.capabilities.native_query_embedding = True
+            logger.info('drevo native query embedding enabled; skipping client-side query embedder')
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed query text server-side via ``drevo.semantic.embed`` (drevo#272)."""
+        records, _, _ = await self.execute_query(_SEMANTIC_EMBED_QUERY, text=text, routing_='r')
+        if not records or records[0].get('vector') is None:
+            raise ValueError('drevo.semantic.embed returned no vector')
+        return records[0]['vector']
 
     def delete_all_indexes(self) -> Coroutine:
         """No-op: nothing to drop, and drevo exposes no index-management procedures."""

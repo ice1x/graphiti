@@ -62,6 +62,7 @@ from graphiti_core.search.search_utils import (
     node_distance_reranker,
     node_fulltext_search,
     node_similarity_search,
+    resolve_query_vector,
     rrf,
 )
 from graphiti_core.tracer import NoOpTracer, Tracer
@@ -142,11 +143,7 @@ async def search(
                 'query_vector.provided': query_vector is not None,
             },
         ) as span:
-            search_vector = (
-                query_vector
-                if query_vector is not None
-                else await embedder.create(input_data=[query.replace('\n', ' ')])
-            )
+            search_vector = await resolve_query_vector(driver, embedder, query, query_vector)
             span.add_attributes({'query_vector.dimension': len(search_vector)})
     else:
         search_vector = [0.0] * EMBEDDING_DIM
