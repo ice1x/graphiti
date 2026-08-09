@@ -14,30 +14,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import typing
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import groq
-    from groq import AsyncGroq
-    from groq.types.chat import ChatCompletionMessageParam
-else:
-    try:
-        import groq
-        from groq import AsyncGroq
-        from groq.types.chat import ChatCompletionMessageParam
-    except ImportError:
-        raise ImportError(
-            'groq is required for GroqClient. Install it with: pip install graphiti-core[groq]'
-        ) from None
 from pydantic import BaseModel
 
 from ..prompts.models import Message
 from .client import LLMClient
 from .config import LLMConfig, ModelSize
 from .errors import RateLimitError
+
+if TYPE_CHECKING:
+    import groq
+    from groq import AsyncGroq
+    from groq.types.chat import ChatCompletionMessageParam
+else:
+    # Defer the optional-SDK requirement to construction time: importing this module
+    # must never fail just because the `groq` extra is not installed (issue #18).
+    try:
+        import groq
+        from groq import AsyncGroq
+        from groq.types.chat import ChatCompletionMessageParam
+    except ImportError:
+        groq = None
+        AsyncGroq = None
+        ChatCompletionMessageParam = None
+
+_GROQ_IMPORT_ERROR = ImportError(
+    'groq is required for GroqClient. Install it with: pip install graphiti-core[groq]'
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +56,9 @@ DEFAULT_MAX_TOKENS = 2048
 
 class GroqClient(LLMClient):
     def __init__(self, config: LLMConfig | None = None, cache: bool = False):
+        if groq is None:
+            raise _GROQ_IMPORT_ERROR
+
         if config is None:
             config = LLMConfig(max_tokens=DEFAULT_MAX_TOKENS)
         elif config.max_tokens is None:

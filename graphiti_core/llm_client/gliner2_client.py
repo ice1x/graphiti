@@ -33,13 +33,16 @@ from .errors import RateLimitError
 if TYPE_CHECKING:
     from gliner2 import GLiNER2  # type: ignore[import-untyped]
 else:
+    # Defer the optional-SDK requirement to construction time: importing this module
+    # must never fail just because the `gliner2` extra is not installed (issue #18).
     try:
         from gliner2 import GLiNER2  # type: ignore[import-untyped]
     except ImportError:
-        raise ImportError(
-            'gliner2 is required for GLiNER2Client. '
-            'Install it with: pip install graphiti-core[gliner2]'
-        ) from None
+        GLiNER2 = None
+
+_GLINER2_IMPORT_ERROR = ImportError(
+    'gliner2 is required for GLiNER2Client. Install it with: pip install graphiti-core[gliner2]'
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,9 @@ class GLiNER2Client(LLMClient):
         include_confidence: bool = False,
         llm_client: LLMClient | None = None,
     ) -> None:
+        if GLiNER2 is None:
+            raise _GLINER2_IMPORT_ERROR
+
         if llm_client is None:
             raise ValueError(
                 'llm_client is required. GLiNER2 cannot handle all operations '
