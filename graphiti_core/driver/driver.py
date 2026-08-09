@@ -126,6 +126,15 @@ class GraphDriver(QueryExecutor, ABC):
     def delete_all_indexes(self) -> Coroutine:
         raise NotImplementedError()
 
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed query text server-side and return the vector.
+
+        Only meaningful for backends that advertise
+        ``capabilities.native_query_embedding``; the default raises so callers
+        must gate on the capability (see
+        ``graphiti_core.search.search_utils.resolve_query_vector``)."""
+        raise NotImplementedError()
+
     def with_database(self, database: str) -> GraphDriver:
         """
         Returns a shallow copy of this driver with a different default database.

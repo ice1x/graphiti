@@ -17,12 +17,16 @@ limitations under the License.
 import logging
 from collections import defaultdict
 from time import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from graphiti_core.embedder import EmbedderClient
 
 import numpy as np
 from numpy._typing import NDArray
 from typing_extensions import LiteralString
 
+from graphiti_core.driver.capabilities import uses_native_query_embedding
 from graphiti_core.driver.driver import (
     GraphDriver,
     GraphProvider,
@@ -66,6 +70,28 @@ DEFAULT_MIN_SCORE = 0.6
 DEFAULT_MMR_LAMBDA = 0.5
 MAX_SEARCH_DEPTH = 3
 MAX_QUERY_LENGTH = 128
+
+
+async def resolve_query_vector(
+    driver: GraphDriver,
+    embedder: 'EmbedderClient',
+    query: str,
+    query_vector: list[float] | None,
+) -> list[float]:
+    """Resolve the query embedding for similarity search.
+
+    Precedence: an explicit precomputed ``query_vector`` wins; otherwise, when the
+    driver embeds queries server-side (``native_query_embedding`` — drevo#272), the
+    vector comes from ``driver.embed_query`` and no client embedder is used; else it
+    is embedded client-side. The resulting vector flows into the existing filtered
+    cosine Cypher unchanged, so server-side embedding never loses Cypher-level
+    filters (group_ids, search filters, source/target constraints)."""
+    if query_vector is not None:
+        return query_vector
+    normalized = query.replace('\n', ' ')
+    if uses_native_query_embedding(driver):
+        return await driver.embed_query(normalized)
+    return await embedder.create(input_data=[normalized])
 
 
 def calculate_cosine_similarity(vector1: list[float], vector2: list[float]) -> float:

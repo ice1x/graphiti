@@ -52,6 +52,15 @@ class GraphCapabilities(BaseModel):
     ``drevo.semantic.info`` reporting ``embedder_present``). When off, embeddings
     are generated client-side as before (the safe fallback)."""
 
+    native_query_embedding: bool = False
+    """Server can embed **query** text on demand (e.g. drevo's
+    ``drevo.semantic.embed(text) YIELD vector``), so the connector can obtain the
+    query vector server-side and feed it to its existing filtered similarity Cypher
+    instead of calling a client-side embedder. Negotiated separately from
+    :attr:`native_auto_embedding` because a backend can auto-embed writes without
+    exposing a standalone query-embed procedure. When off, query embedding is done
+    client-side (the safe fallback)."""
+
 
 def uses_native_auto_embedding(driver: object) -> bool:
     """Whether ``driver`` embeds stored node/edge properties server-side.
@@ -63,3 +72,14 @@ def uses_native_auto_embedding(driver: object) -> bool:
     """
     capabilities = getattr(driver, 'capabilities', None)
     return bool(capabilities is not None and getattr(capabilities, 'native_auto_embedding', False))
+
+
+def uses_native_query_embedding(driver: object) -> bool:
+    """Whether ``driver`` can embed query text server-side (a standalone embed
+    procedure), letting the connector skip the client-side query embedder.
+
+    Duck-typed on ``driver.capabilities`` like :func:`uses_native_auto_embedding`;
+    returns ``False`` when the driver exposes no capabilities.
+    """
+    capabilities = getattr(driver, 'capabilities', None)
+    return bool(capabilities is not None and getattr(capabilities, 'native_query_embedding', False))

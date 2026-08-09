@@ -21,7 +21,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from graphiti_core.driver.capabilities import uses_native_auto_embedding
+from graphiti_core.driver.capabilities import (
+    uses_native_auto_embedding,
+    uses_native_query_embedding,
+)
 from graphiti_core.edges import EntityEdge
 from graphiti_core.graphiti_types import GraphitiClients
 from graphiti_core.helpers import semaphore_gather
@@ -425,14 +428,21 @@ async def _semantic_candidate_search(
         return []
 
     queries = [node.name.replace('\n', ' ') for node in extracted_nodes]
-    try:
-        query_vectors = await clients.embedder.create_batch(queries)
-    except NotImplementedError:
+    if uses_native_query_embedding(clients.driver):
+        # Embed each candidate query server-side (drevo#272) so dedup needs no
+        # client embedder; the vectors feed the same filtered similarity search.
         query_vectors = list(
-            await semaphore_gather(
-                *[clients.embedder.create(input_data=[query]) for query in queries]
-            )
+            await semaphore_gather(*[clients.driver.embed_query(query) for query in queries])
         )
+    else:
+        try:
+            query_vectors = await clients.embedder.create_batch(queries)
+        except NotImplementedError:
+            query_vectors = list(
+                await semaphore_gather(
+                    *[clients.embedder.create(input_data=[query]) for query in queries]
+                )
+            )
 
     return list(
         await semaphore_gather(
