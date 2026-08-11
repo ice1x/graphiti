@@ -259,6 +259,20 @@ def get_entity_node_save_bulk_query(
                     n.attributes = $attributes
                 RETURN n.uuid AS uuid
             """
+        case GraphProvider.DREVO:
+            # drevo's Cypher does not implement Neo4j-5 dynamic labels
+            # (`SET n:$(node.labels)`) or the `db.create.setNodeVectorProperty`
+            # procedure. `SET n = node` writes every property in one map
+            # assignment, storing `name_embedding` as a plain numeric list — which
+            # is exactly what drevo's brute-force `drevo.vector.query` /
+            # `cosine_similarity` read. The extra entity-type labels ride along as
+            # the `labels` property rather than as node labels.
+            return """
+                UNWIND $nodes AS node
+                MERGE (n:Entity {uuid: node.uuid})
+                SET n = node
+                RETURN n.uuid AS uuid
+            """
         case _:  # Neo4j
             save_embedding_query = (
                 'WITH n, node CALL db.create.setNodeVectorProperty(n, "name_embedding", node.name_embedding)'
