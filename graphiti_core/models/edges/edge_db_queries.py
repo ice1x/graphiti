@@ -177,6 +177,18 @@ def get_entity_edge_save_bulk_query(provider: GraphProvider, has_aoss: bool = Fa
                     e.attributes = $attributes
                 RETURN e.uuid AS uuid
             """
+        case GraphProvider.DREVO:
+            # drevo has no `db.create.setRelationshipVectorProperty`; `SET e = edge`
+            # writes `fact_embedding` as a plain numeric list (what drevo's vector
+            # search reads) and datetimes as strings, in one map assignment.
+            return """
+                UNWIND $entity_edges AS edge
+                MATCH (source:Entity {uuid: edge.source_node_uuid})
+                MATCH (target:Entity {uuid: edge.target_node_uuid})
+                MERGE (source)-[e:RELATES_TO {uuid: edge.uuid}]->(target)
+                SET e = edge
+                RETURN edge.uuid AS uuid
+            """
         case _:
             save_embedding_query = (
                 'WITH e, edge CALL db.create.setRelationshipVectorProperty(e, "fact_embedding", edge.fact_embedding)'
