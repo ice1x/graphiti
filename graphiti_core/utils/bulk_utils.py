@@ -136,15 +136,38 @@ async def add_nodes_and_edges_bulk(
 ):
     session = driver.session()
     try:
-        await session.execute_write(
-            add_nodes_and_edges_bulk_tx,
-            episodic_nodes,
-            episodic_edges,
-            entity_nodes,
-            entity_edges,
-            embedder,
-            driver=driver,
-        )
+        if driver.provider == GraphProvider.DREVO:
+            # drevo's managed/explicit-transaction path (session.execute_write,
+            # i.e. BEGIN…COMMIT with retries) intermittently fails the 4 save-bulk
+            # statements on drevo <= v0.0.14 with 'unbound variable node/edge' and,
+            # on the driver's retry, 'transaction already active' (ice1x/drevo#298,
+            # graphiti issue #27). The identical statements run reliably under
+            # autocommit session.run, so drive the same tx body with the session
+            # itself as the executor — session.run is autocommit and shares the
+            # tx.run(query, **params) signature the body relies on. Trade-off: the
+            # batch is no longer a single atomic transaction on drevo (per-statement
+            # commit), which is already the reliable drevo write pattern.
+            # Fixed server-side in drevo #299 / v0.0.15; this keeps graphiti correct
+            # against older drevo deployments too.
+            await add_nodes_and_edges_bulk_tx(
+                session,
+                episodic_nodes,
+                episodic_edges,
+                entity_nodes,
+                entity_edges,
+                embedder,
+                driver=driver,
+            )
+        else:
+            await session.execute_write(
+                add_nodes_and_edges_bulk_tx,
+                episodic_nodes,
+                episodic_edges,
+                entity_nodes,
+                entity_edges,
+                embedder,
+                driver=driver,
+            )
     finally:
         await session.close()
 
