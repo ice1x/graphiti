@@ -3,11 +3,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from graphiti_core.driver.capabilities import GraphCapabilities
+from graphiti_core.driver.driver import GraphProvider
 from graphiti_core.edges import EntityEdge
 from graphiti_core.graphiti_types import GraphitiClients
 from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
 from graphiti_core.utils import bulk_utils
-from graphiti_core.utils.bulk_utils import extract_nodes_and_edges_bulk
+from graphiti_core.utils.bulk_utils import add_nodes_and_edges_bulk, extract_nodes_and_edges_bulk
 from graphiti_core.utils.datetime_utils import utc_now
 
 
@@ -327,6 +329,73 @@ async def test_dedupe_edges_bulk_deduplicates_within_episode(monkeypatch):
     for _, compared_against in comparisons_made:
         # Each edge should have access to all 3 edges as candidates
         assert len(compared_against) >= 2  # At least 2 others (self is filtered out)
+
+
+class _FakeSession:
+    """Session double exposing both the managed (execute_write) and autocommit
+    (run) write paths so tests can assert which one add_nodes_and_edges_bulk uses."""
+
+    def __init__(self):
+        self.run = AsyncMock()
+        self.execute_write = AsyncMock()
+        self.close = AsyncMock()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _make_bulk_driver(provider: GraphProvider):
+    driver = MagicMock()
+    driver.provider = provider
+    # DREVO uses the else (tx.run) branch; no graph_operations_interface.
+    driver.graph_operations_interface = None
+    # native auto-embedding on → skip client-side embedding round-trips so the
+    # test stays focused on the transaction-execution path.
+    driver.capabilities = GraphCapabilities(native_auto_embedding=True)
+    session = _FakeSession()
+    driver.session = MagicMock(return_value=session)
+    return driver, session
+
+
+@pytest.mark.asyncio
+async def test_add_nodes_and_edges_bulk_drevo_uses_autocommit():
+    """DREVO must write the bulk statements via autocommit session.run, NOT via
+    session.execute_write (managed tx), to sidestep drevo's managed-transaction
+    bug on drevo <= v0.0.14 (ice1x/drevo#298, issue #27)."""
+    driver, session = _make_bulk_driver(GraphProvider.DREVO)
+
+    episode = _make_episode('drevo')
+    node = EntityNode(name='Alice', group_id='group', labels=['Entity'])
+
+    await add_nodes_and_edges_bulk(driver, [episode], [], [node], [], MagicMock())
+
+    # Managed transaction path must be avoided for drevo.
+    session.execute_write.assert_not_awaited()
+    # The four save-bulk statements run as autocommit, in canonical order:
+    # episode nodes → entity nodes → episodic edges → entity edges.
+    assert session.run.await_count == 4
+    ordered_param_keys = [next(iter(call.kwargs)) for call in session.run.await_args_list]
+    assert ordered_param_keys == ['episodes', 'nodes', 'episodic_edges', 'entity_edges']
+
+
+@pytest.mark.asyncio
+async def test_add_nodes_and_edges_bulk_neo4j_uses_managed_transaction():
+    """Non-drevo providers keep the managed-transaction (execute_write) path so
+    the batch stays atomic; the autocommit fallback is drevo-specific."""
+    driver, session = _make_bulk_driver(GraphProvider.NEO4J)
+
+    episode = _make_episode('neo4j')
+    node = EntityNode(name='Bob', group_id='group', labels=['Entity'])
+
+    await add_nodes_and_edges_bulk(driver, [episode], [], [node], [], MagicMock())
+
+    session.execute_write.assert_awaited_once()
+    # add_nodes_and_edges_bulk itself must not bypass to autocommit for neo4j;
+    # the tx body runs inside execute_write (mocked here, so run stays untouched).
+    session.run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
