@@ -620,6 +620,29 @@ When using smaller or local models:
 - Keep `SEMAPHORE_LIMIT` low (see [above](#default-to-low-concurrency-llm-provider-429-rate-limit-errors)) — local
   servers and some providers have limited concurrency.
 
+## Tracking Token Usage / Cost
+
+Every `LLMClient` accumulates the **provider-reported** token usage of the calls
+made through it (never an estimate) on its `token_tracker`. `add_episode` fans out
+into many LLM calls, so this is how you learn what an ingest actually cost — read
+it off the same client instance you passed to `Graphiti`:
+
+```python
+client = OpenAIClient(config=LLMConfig(api_key='...', model='gpt-4o-mini'))
+graphiti = Graphiti(..., llm_client=client)
+
+client.token_tracker.reset()          # start a fresh window (e.g. per book)
+await graphiti.add_episode(...)        # thousands of calls for a large document
+
+print(client.total_usage)              # cumulative: TokenUsage(input_tokens, output_tokens, total_tokens)
+print(client.last_usage)               # most recent call only (or None before any call)
+client.token_tracker.print_summary()   # per-prompt breakdown (extract_nodes, extract_edges, dedupe, ...)
+```
+
+`token_tracker.get_usage()` returns the per-prompt-type breakdown as data, and
+`get_total_usage()` the cumulative total. Usage is captured for the OpenAI,
+Anthropic, and Gemini clients from each provider's own `usage` block.
+
 ## Documentation
 
 - [Guides and API documentation](https://help.getzep.com/graphiti).

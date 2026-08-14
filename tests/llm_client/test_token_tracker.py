@@ -193,6 +193,25 @@ class TestTokenUsageTracker:
         assert total.input_tokens == expected_input
         assert total.output_tokens == expected_output
 
+    def test_last_usage_none_initially(self):
+        """No calls recorded yet -> last_usage is None."""
+        tracker = TokenUsageTracker()
+        assert tracker.last_usage is None
+
+    def test_last_usage_reflects_most_recent_call(self):
+        """last_usage holds the single most recent call's tokens, not the total."""
+        tracker = TokenUsageTracker()
+        tracker.record('extract_nodes', 100, 50)
+        tracker.record('extract_edges', 200, 75)
+        assert tracker.last_usage == TokenUsage(input_tokens=200, output_tokens=75)
+
+    def test_reset_clears_last_usage(self):
+        """reset() clears the most-recent-call snapshot too."""
+        tracker = TokenUsageTracker()
+        tracker.record('extract_nodes', 100, 50)
+        tracker.reset()
+        assert tracker.last_usage is None
+
     def test_concurrent_same_prompt(self):
         """Test concurrent access to the same prompt name."""
         tracker = TokenUsageTracker()

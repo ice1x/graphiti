@@ -16,6 +16,7 @@ limitations under the License.
 
 from graphiti_core.llm_client.client import LLMClient
 from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.llm_client.token_tracker import TokenUsage
 from graphiti_core.prompts.models import Message
 
 
@@ -24,6 +25,22 @@ class MockLLMClient(LLMClient):
 
     async def _generate_response(self, messages, response_model=None):
         return {'content': 'test'}
+
+
+def test_last_usage_and_total_usage_convenience():
+    """LLMClient exposes provider-reported token usage: last_usage (most recent
+    call) and total_usage (cumulative), delegating to the client's token_tracker
+    so a host application can budget per-ingest cost (issue #30)."""
+    client = MockLLMClient(LLMConfig())
+
+    assert client.last_usage is None
+    assert client.total_usage == TokenUsage(input_tokens=0, output_tokens=0)
+
+    client.token_tracker.record('extract_nodes', 100, 50)
+    client.token_tracker.record('extract_edges', 200, 75)
+
+    assert client.last_usage == TokenUsage(input_tokens=200, output_tokens=75)
+    assert client.total_usage == TokenUsage(input_tokens=300, output_tokens=125)
 
 
 def test_clean_input():

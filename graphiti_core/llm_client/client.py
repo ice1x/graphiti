@@ -29,7 +29,7 @@ from ..tracer import NoOpTracer, Tracer
 from .cache import LLMCache
 from .config import DEFAULT_MAX_TOKENS, LLMConfig, ModelSize
 from .errors import EmptyResponseError, RateLimitError
-from .token_tracker import TokenUsageTracker
+from .token_tracker import TokenUsage, TokenUsageTracker
 
 DEFAULT_TEMPERATURE = 0
 DEFAULT_CACHE_DIR = './llm_cache'
@@ -94,6 +94,19 @@ class LLMClient(ABC):
     def set_tracer(self, tracer: Tracer) -> None:
         """Set the tracer for this LLM client."""
         self.tracer = tracer
+
+    @property
+    def last_usage(self) -> TokenUsage | None:
+        """Provider-reported token usage of the most recent call, or None if no
+        call has been made. Convenience accessor over ``self.token_tracker``."""
+        return self.token_tracker.last_usage
+
+    @property
+    def total_usage(self) -> TokenUsage:
+        """Cumulative provider-reported token usage across every call made through
+        this client. Read after e.g. ``add_episode`` to budget per-ingest cost;
+        call ``self.token_tracker.reset()`` to start a fresh accounting window."""
+        return self.token_tracker.get_total_usage()
 
     def _clean_input(self, input: str) -> str:
         """Clean input string of invalid unicode and control characters.

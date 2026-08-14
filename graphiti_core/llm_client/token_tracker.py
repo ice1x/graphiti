@@ -57,6 +57,7 @@ class TokenUsageTracker:
 
     def __init__(self):
         self._usage: dict[str, PromptTokenUsage] = {}
+        self._last_usage: TokenUsage | None = None
         self._lock = Lock()
 
     def record(self, prompt_name: str | None, input_tokens: int, output_tokens: int) -> None:
@@ -76,6 +77,15 @@ class TokenUsageTracker:
             self._usage[key].call_count += 1
             self._usage[key].total_input_tokens += input_tokens
             self._usage[key].total_output_tokens += output_tokens
+            self._last_usage = TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+
+    @property
+    def last_usage(self) -> TokenUsage | None:
+        """Token usage of the most recently recorded call, or None if no call has
+        been recorded yet. Unlike :meth:`get_total_usage`, this is the single last
+        call rather than the cumulative sum."""
+        with self._lock:
+            return self._last_usage
 
     def get_usage(self) -> dict[str, PromptTokenUsage]:
         """Get a copy of current token usage by prompt type."""
@@ -101,6 +111,7 @@ class TokenUsageTracker:
         """Reset all tracked usage."""
         with self._lock:
             self._usage.clear()
+            self._last_usage = None
 
     def print_summary(self, sort_by: str = 'total_tokens') -> None:
         """Print a formatted summary of token usage.
