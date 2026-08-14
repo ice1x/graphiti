@@ -133,9 +133,7 @@ class LLMClient(ABC):
         if self.on_usage is not None:
             try:
                 self.on_usage(
-                    TokenUsage(
-                        input_tokens=input_tokens, output_tokens=output_tokens, model=model
-                    )
+                    TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, model=model)
                 )
             except Exception:  # noqa: BLE001 - a user callback must never break ingest
                 logger.warning('on_usage callback raised; ignoring', exc_info=True)

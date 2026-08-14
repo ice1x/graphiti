@@ -39,7 +39,9 @@ class TestTokenUsage:
     def test_model_defaults_to_none(self):
         """A per-call usage carries an optional model name, defaulting to None."""
         assert TokenUsage().model is None
-        assert TokenUsage(input_tokens=1, output_tokens=2, model='gpt-4o-mini').model == 'gpt-4o-mini'
+        assert (
+            TokenUsage(input_tokens=1, output_tokens=2, model='gpt-4o-mini').model == 'gpt-4o-mini'
+        )
 
 
 class TestPromptTokenUsage:
