@@ -43,6 +43,49 @@ def test_last_usage_and_total_usage_convenience():
     assert client.total_usage == TokenUsage(input_tokens=300, output_tokens=125)
 
 
+def test_on_usage_none_by_default_and_record_usage_is_safe():
+    """No callback is registered by default; _record_usage still records to the
+    tracker and does not raise (issue #30 option 3)."""
+    client = MockLLMClient(LLMConfig())
+    assert client.on_usage is None
+
+    client._record_usage('extract_nodes', 100, 50)
+
+    assert client.last_usage == TokenUsage(input_tokens=100, output_tokens=50)
+
+
+def test_on_usage_callback_fires_with_per_call_usage_and_model():
+    """A registered on_usage callback receives the per-call TokenUsage (including
+    model) for every recorded call, and the usage is also tracked."""
+    client = MockLLMClient(LLMConfig())
+    seen: list[TokenUsage] = []
+    client.set_on_usage(seen.append)
+
+    client._record_usage('extract_nodes', 100, 50, model='gpt-4o-mini')
+    client._record_usage('extract_edges', 200, 75, model='gpt-4o-mini')
+
+    assert seen == [
+        TokenUsage(input_tokens=100, output_tokens=50, model='gpt-4o-mini'),
+        TokenUsage(input_tokens=200, output_tokens=75, model='gpt-4o-mini'),
+    ]
+    assert client.last_usage == TokenUsage(input_tokens=200, output_tokens=75, model='gpt-4o-mini')
+    assert client.total_usage == TokenUsage(input_tokens=300, output_tokens=125)
+
+
+def test_on_usage_callback_exception_never_breaks_ingest():
+    """A raising callback must be isolated — usage reporting can't break an ingest."""
+    client = MockLLMClient(LLMConfig())
+
+    def boom(_usage):
+        raise RuntimeError('callback blew up')
+
+    client.set_on_usage(boom)
+
+    client._record_usage('extract_nodes', 100, 50, model='m')  # must not raise
+
+    assert client.last_usage == TokenUsage(input_tokens=100, output_tokens=50, model='m')
+
+
 def test_clean_input():
     client = MockLLMClient(LLMConfig())
 

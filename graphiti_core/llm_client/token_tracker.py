@@ -24,6 +24,9 @@ class TokenUsage:
 
     input_tokens: int = 0
     output_tokens: int = 0
+    model: str | None = None
+    """Provider model that produced this call, when known (per-call only; the
+    cumulative total spans model sizes and leaves this None)."""
 
     @property
     def total_tokens(self) -> int:
@@ -60,13 +63,22 @@ class TokenUsageTracker:
         self._last_usage: TokenUsage | None = None
         self._lock = Lock()
 
-    def record(self, prompt_name: str | None, input_tokens: int, output_tokens: int) -> None:
+    def record(
+        self,
+        prompt_name: str | None,
+        input_tokens: int,
+        output_tokens: int,
+        model: str | None = None,
+    ) -> None:
         """Record token usage for a prompt.
 
         Args:
             prompt_name: Name of the prompt (e.g., 'extract_nodes.extract_message')
             input_tokens: Number of input tokens used
             output_tokens: Number of output tokens generated
+            model: Provider model that produced the call, when known. Captured on
+                the per-call ``last_usage`` snapshot (the cumulative totals stay
+                model-agnostic).
         """
         key = prompt_name or 'unknown'
 
@@ -77,7 +89,9 @@ class TokenUsageTracker:
             self._usage[key].call_count += 1
             self._usage[key].total_input_tokens += input_tokens
             self._usage[key].total_output_tokens += output_tokens
-            self._last_usage = TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+            self._last_usage = TokenUsage(
+                input_tokens=input_tokens, output_tokens=output_tokens, model=model
+            )
 
     @property
     def last_usage(self) -> TokenUsage | None:

@@ -412,7 +412,9 @@ class AnthropicClient(LLMClient):
                     total_output_tokens += output_tokens
 
                     # Record token usage
-                    self.token_tracker.record(prompt_name, total_input_tokens, total_output_tokens)
+                    self._record_usage(
+                        prompt_name, total_input_tokens, total_output_tokens, model=self.model
+                    )
 
                     # If we have a response_model, attempt to validate the response
                     if response_model is not None:
