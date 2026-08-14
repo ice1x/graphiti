@@ -62,4 +62,5 @@ jobs:
             tests/driver/test_drevo_driver.py \
             tests/driver/test_drevo_native_embedding.py \
             tests/driver/test_drevo_native_query_embedding.py \
+            tests/driver/test_drevo_version_check.py \
             tests/driver/test_drevo_search_interface.py
