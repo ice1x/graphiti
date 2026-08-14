@@ -287,7 +287,12 @@ class BaseOpenAIClient(LLMClient):
                     total_output_tokens += output_tokens
 
                     # Record token usage
-                    self.token_tracker.record(prompt_name, total_input_tokens, total_output_tokens)
+                    self._record_usage(
+                        prompt_name,
+                        total_input_tokens,
+                        total_output_tokens,
+                        model=self._get_model_for_size(model_size),
+                    )
 
                     return response
                 except (RateLimitError, RefusalError):

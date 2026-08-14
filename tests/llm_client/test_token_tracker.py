@@ -36,6 +36,13 @@ class TestTokenUsage:
         assert usage.output_tokens == 0
         assert usage.total_tokens == 0
 
+    def test_model_defaults_to_none(self):
+        """A per-call usage carries an optional model name, defaulting to None."""
+        assert TokenUsage().model is None
+        assert (
+            TokenUsage(input_tokens=1, output_tokens=2, model='gpt-4o-mini').model == 'gpt-4o-mini'
+        )
+
 
 class TestPromptTokenUsage:
     def test_total_tokens(self):
@@ -211,6 +218,14 @@ class TestTokenUsageTracker:
         tracker.record('extract_nodes', 100, 50)
         tracker.reset()
         assert tracker.last_usage is None
+
+    def test_record_carries_model_onto_last_usage(self):
+        """The optional model name flows onto the per-call last_usage snapshot."""
+        tracker = TokenUsageTracker()
+        tracker.record('extract_nodes', 100, 50, model='gpt-4o-mini')
+        assert tracker.last_usage == TokenUsage(
+            input_tokens=100, output_tokens=50, model='gpt-4o-mini'
+        )
 
     def test_concurrent_same_prompt(self):
         """Test concurrent access to the same prompt name."""

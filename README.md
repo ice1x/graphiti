@@ -643,6 +643,17 @@ client.token_tracker.print_summary()   # per-prompt breakdown (extract_nodes, ex
 `get_total_usage()` the cumulative total. Usage is captured for the OpenAI,
 Anthropic, and Gemini clients from each provider's own `usage` block.
 
+`last_usage` also carries the `model` that produced the call. For streaming
+aggregation or multi-tenant cost attribution, register a per-call callback — it
+receives each call's `TokenUsage` (including `model`) as soon as it is recorded:
+
+```python
+client.set_on_usage(lambda u: meter.add(tenant_id, u.model, u.total_tokens))
+```
+
+The callback is isolated: an exception it raises is logged and never breaks an
+ingest.
+
 ## Documentation
 
 - [Guides and API documentation](https://help.getzep.com/graphiti).

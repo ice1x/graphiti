@@ -19,6 +19,7 @@ import json
 import logging
 import typing
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 import httpx
 from pydantic import BaseModel
@@ -86,6 +87,10 @@ class LLMClient(ABC):
         self.cache_dir = None
         self.tracer: Tracer = NoOpTracer()
         self.token_tracker: TokenUsageTracker = TokenUsageTracker()
+        # Optional per-call usage hook (issue #30 option 3): invoked with each
+        # call's provider-reported TokenUsage. Suits streaming aggregation and
+        # multi-tenant cost attribution. Register via set_on_usage.
+        self.on_usage: Callable[[TokenUsage], None] | None = None
 
         # Only create the cache directory if caching is enabled
         if self.cache_enabled:
@@ -107,6 +112,31 @@ class LLMClient(ABC):
         this client. Read after e.g. ``add_episode`` to budget per-ingest cost;
         call ``self.token_tracker.reset()`` to start a fresh accounting window."""
         return self.token_tracker.get_total_usage()
+
+    def set_on_usage(self, on_usage: Callable[[TokenUsage], None] | None) -> None:
+        """Register (or clear with ``None``) a per-call usage callback. It is
+        invoked with each call's provider-reported :class:`TokenUsage` (including
+        the model) as soon as usage is recorded."""
+        self.on_usage = on_usage
+
+    def _record_usage(
+        self,
+        prompt_name: str | None,
+        input_tokens: int,
+        output_tokens: int,
+        model: str | None = None,
+    ) -> None:
+        """Record provider-reported token usage on the tracker and fire the optional
+        ``on_usage`` callback. The callback is isolated: an exception it raises is
+        logged and swallowed so usage reporting can never break an ingest."""
+        self.token_tracker.record(prompt_name, input_tokens, output_tokens, model=model)
+        if self.on_usage is not None:
+            try:
+                self.on_usage(
+                    TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, model=model)
+                )
+            except Exception:  # noqa: BLE001 - a user callback must never break ingest
+                logger.warning('on_usage callback raised; ignoring', exc_info=True)
 
     def _clean_input(self, input: str) -> str:
         """Clean input string of invalid unicode and control characters.
