@@ -49,6 +49,40 @@ _SEMANTIC_REGISTER_QUERIES = (
 # Cypher — no client embedder, no lost filters.
 _SEMANTIC_EMBED_QUERY = 'CALL drevo.semantic.embed($text) YIELD vector RETURN vector'
 
+# Server-version compatibility gate. DrevoDriver has accumulated hard requirements
+# on the drevo server: datetime Bolt params (graphiti#21), dedicated bulk save
+# Cypher with dynamic labels/vector props (graphiti#25/#26), the managed-tx fix
+# (drevo#298/#299 → v0.0.15), and the empty-UNWIND+write fix (drevo#300/#301 →
+# v0.0.16). v0.0.16 is therefore the lowest drevo this connector can drive
+# correctly. drevo exposes its own version via CALL drevo.info() (drevo#303/#304,
+# available from v0.0.18); a drevo too old to have that procedure cannot be
+# verified and is only warned about.
+MINIMUM_DREVO_VERSION = '0.0.16'
+_INFO_QUERY = (
+    'CALL drevo.info() '
+    'YIELD version, git_sha, build_date, protocol '
+    'RETURN version, git_sha, build_date, protocol'
+)
+
+
+def _parse_semver(version: str) -> tuple[int, ...]:
+    """Parse a dotted version string like ``0.0.18`` (or ``v0.0.18``) into a
+    comparable integer tuple. Parsing stops at the first non-numeric component, so
+    a build/pre-release suffix (``0.0.18-rc1`` → ``(0, 0, 18)``) degrades to a
+    best-effort comparison instead of raising."""
+    parts: list[int] = []
+    for chunk in version.strip().lstrip('vV').split('.'):
+        digits = ''
+        for ch in chunk:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
 
 class DrevoDriver(Neo4jDriver):
     """Connector for `drevo <https://github.com/ice1x/drevo>`_.
@@ -104,10 +138,51 @@ class DrevoDriver(Neo4jDriver):
 
     async def build_indices_and_constraints(self, delete_existing: bool = False) -> None:
         """drevo manages indexes out-of-band (no index DDL), but this is the setup
-        hook where we negotiate server-side auto-embedding and register the
-        embedding targets."""
+        hook where we verify server compatibility and negotiate server-side
+        auto-embedding / register the embedding targets."""
+        await self._negotiate_drevo_version()
         await self._negotiate_native_auto_embedding()
         return None
+
+    async def _negotiate_drevo_version(self) -> None:
+        """Assert the connected drevo meets the connector's minimum version.
+
+        Probes ``CALL drevo.info()`` (drevo#303/#304, v0.0.18+):
+
+        * reports ``version < MINIMUM_DREVO_VERSION`` → raise ``RuntimeError`` with a
+          clear upgrade message (fail fast rather than emit writes an older drevo
+          mishandles);
+        * procedure missing / unreadable (drevo older than v0.0.18, which introduced
+          ``drevo.info``) or no ``version`` field → cannot verify, log a warning and
+          continue. Such a drevo may still be below the minimum in a way this check
+          can't detect, hence the warning."""
+        try:
+            records, _, _ = await self.execute_query(_INFO_QUERY, routing_='r')
+        except Exception as e:  # noqa: BLE001 - any failure means "can't verify"
+            logger.warning(
+                'Could not verify drevo version (drevo.info unavailable: %s). '
+                'Ensure the connected drevo is >= %s.',
+                e,
+                MINIMUM_DREVO_VERSION,
+            )
+            return
+
+        version = records[0].get('version') if records else None
+        if not version:
+            logger.warning(
+                'drevo.info returned no version; cannot verify compatibility. '
+                'Ensure the connected drevo is >= %s.',
+                MINIMUM_DREVO_VERSION,
+            )
+            return
+
+        if _parse_semver(version) < _parse_semver(MINIMUM_DREVO_VERSION):
+            raise RuntimeError(
+                f'Connected drevo is version {version}, but this graphiti connector '
+                f'requires drevo >= {MINIMUM_DREVO_VERSION}. Upgrade drevo to >= '
+                f'{MINIMUM_DREVO_VERSION}.'
+            )
+        logger.info('drevo version %s satisfies minimum %s', version, MINIMUM_DREVO_VERSION)
 
     async def _negotiate_native_auto_embedding(self) -> None:
         """Detect drevo's Phase 21 server-side embedder and register embedding
